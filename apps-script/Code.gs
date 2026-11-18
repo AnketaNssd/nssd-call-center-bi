@@ -1,5 +1,5 @@
 function doGet() {
-  return HtmlService.createHtmlOutputFromFile('Index').setTitle('NSSD · Аналитика колл-центра');
+  return HtmlService.createHtmlOutputFromFile('Index').setTitle('NSSD · Аналитика колл-центра').addMetaTag('viewport','width=device-width, initial-scale=1');
 }
 
 function rpc(action, payload) {

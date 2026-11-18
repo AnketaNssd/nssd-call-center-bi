@@ -29,10 +29,20 @@ type ScriptRunner = {
   withFailureHandler: (fn:(error:Error)=>void)=>ScriptRunner
   rpc: (action:string,payload:unknown)=>void
 }
-const runner = (window as Window & {google?:{script?:{run?:ScriptRunner}}}).google?.script?.run
+const scriptWindow=window as Window & {google?:{script?:{run?:ScriptRunner}}}
+const getRunner=()=>scriptWindow.google?.script?.run
+const inAppsScript=document.documentElement.dataset.host==='apps-script'
+function readTheme() {
+  try { return localStorage.getItem('nssd-theme') } catch { return null }
+}
+function saveTheme(theme:string) {
+  try { localStorage.setItem('nssd-theme',theme) } catch { /* Theme still applies for this session. */ }
+}
 async function api<T>(path:string, init?:RequestInit):Promise<T> {
-  if (runner) {
-    const url=new URL(path,location.href)
+  if (inAppsScript) {
+    const runner=getRunner()
+    if (!runner) throw new Error('Google Apps Script не подключил интерфейс. Откройте ссылку /exec из настроек развёртывания.')
+    const url=new URL(path,'https://apps-script.invalid')
     const actions:Record<string,string>={'/api/session':'session','/api/dashboard':'dashboard','/api/refresh':'refresh','/api/targets':init?.method==='PUT'?'saveTargets':'targets'}
     const payload=init?.body?JSON.parse(String(init.body)):Object.fromEntries(url.searchParams)
     return new Promise<T>((resolve,reject)=>runner.withSuccessHandler(value=>resolve(value as T)).withFailureHandler(reject).rpc(actions[url.pathname],payload))
@@ -91,7 +101,7 @@ function Targets({csrf}:{csrf:string}) {
 }
 function Dashboard({session}:{session:Session}) {
   const [section,setSection]=useState(currentSection)
-  const [dark,setDark]=useState(localStorage.getItem('nssd-theme')==='dark')
+  const [dark,setDark]=useState(readTheme()==='dark')
   const [start,setStart]=useState(session.range.start)
   const [end,setEnd]=useState(session.range.end)
   const [agent,setAgent]=useState('')
@@ -101,7 +111,7 @@ function Dashboard({session}:{session:Session}) {
   const [refreshError,setRefreshError]=useState('')
   const [refreshing,setRefreshing]=useState(false)
   useEffect(()=>{const update=()=>setSection(currentSection());window.addEventListener('hashchange',update);return ()=>window.removeEventListener('hashchange',update)},[])
-  useEffect(()=>{document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('nssd-theme',dark?'dark':'light')},[dark])
+  useEffect(()=>{document.documentElement.dataset.theme=dark?'dark':'light';saveTheme(dark?'dark':'light')},[dark])
   const query=new URLSearchParams({start,end,agent,manager,region,compare:String(compare||section==='compare'),section})
   const view=useQuery({queryKey:['view',query.toString()],queryFn:()=>api<View>('/api/dashboard?'+query),refetchInterval:60_000,enabled:!!start&&!!end&&start<=end})
   async function refresh() {
@@ -128,7 +138,7 @@ function Dashboard({session}:{session:Session}) {
     <main>
       <header className="top"><div><div className="eyebrow">Управленческая аналитика</div><h1>{sections.find(([id])=>id===section)?.[1]}</h1></div>
       <div className="top-actions"><button onClick={()=>setDark(!dark)}>{dark?'Светлая тема':'Тёмная тема'}</button><button onClick={refresh} disabled={refreshing}>{refreshing?'Обновление…':'Обновить данные'}</button>
-      {!runner&&<form action="/auth/logout" method="post"><input name="csrf" type="hidden" value={session.csrf}/><button>Выйти</button></form>}</div></header>
+      {!inAppsScript&&<form action="/auth/logout" method="post"><input name="csrf" type="hidden" value={session.csrf}/><button>Выйти</button></form>}</div></header>
       <div className="panel filters">
         <div className="presets">{[[1,'Последний день'],[7,'7 дней'],[0,'Месяц']].map(([days,label])=><button key={days} onClick={()=>preset(Number(days))}>{label}</button>)}</div>
         <label>С даты<input type="date" value={start} onChange={e=>setStart(e.target.value)}/></label>
@@ -165,7 +175,16 @@ function Dashboard({session}:{session:Session}) {
 function App() {
   const session=useQuery({queryKey:['session'],queryFn:()=>api<Session>('/api/session'),refetchInterval:60_000})
   if(session.isPending) return <main className="login"><section className="panel" role="status">Проверка доступа…</section></main>
-  if(session.isError) return <main className="login"><section className="panel"><div className="eyebrow">НССД</div><h1>Аналитика колл-центра</h1><p>{runner?"Проверьте настройки источников и попробуйте ещё раз.":"Войдите через допущенную корпоративную учётную запись."}</p>{runner?<><p role="alert">{session.error.message}</p><button onClick={()=>session.refetch()}>Повторить</button></>:<a className="primary" href="/auth/login">Войти через Google</a>}</section></main>
+  if(session.isError) return <main className="login"><section className="panel"><div className="eyebrow">НССД</div><h1>Аналитика колл-центра</h1><p>{inAppsScript?"Проверьте настройки источников и попробуйте ещё раз.":"Войдите через допущенную корпоративную учётную запись."}</p>{inAppsScript?<><p role="alert">{session.error.message}</p><button onClick={()=>session.refetch()}>Повторить</button></>:<a className="primary" href="/auth/login">Войти через Google</a>}</section></main>
   return <Dashboard session={session.data}/>
 }
-createRoot(document.getElementById('root')!).render(<QueryClientProvider client={client}><App/></QueryClientProvider>)
+function mount() {
+  createRoot(document.getElementById('root')!, {
+    onUncaughtError: () => {
+      const status=document.getElementById('startup-status')
+      if(status) status.textContent='Интерфейс остановился. Обновите страницу и проверьте версию развёртывания.'
+    },
+  }).render(<QueryClientProvider client={client}><App/></QueryClientProvider>)
+}
+if(inAppsScript&&document.readyState!=='complete') window.addEventListener('load',mount,{once:true})
+else mount()
