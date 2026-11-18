@@ -24,7 +24,19 @@ function currentSection() {
   const key = location.hash.slice(1)
   return sections.find(([id])=>id===key)?.[0] ?? 'home'
 }
+type ScriptRunner = {
+  withSuccessHandler: (fn:(value:unknown)=>void)=>ScriptRunner
+  withFailureHandler: (fn:(error:Error)=>void)=>ScriptRunner
+  rpc: (action:string,payload:unknown)=>void
+}
+const runner = (window as Window & {google?:{script?:{run?:ScriptRunner}}}).google?.script?.run
 async function api<T>(path:string, init?:RequestInit):Promise<T> {
+  if (runner) {
+    const url=new URL(path,location.href)
+    const actions:Record<string,string>={'/api/session':'session','/api/dashboard':'dashboard','/api/refresh':'refresh','/api/targets':init?.method==='PUT'?'saveTargets':'targets'}
+    const payload=init?.body?JSON.parse(String(init.body)):Object.fromEntries(url.searchParams)
+    return new Promise<T>((resolve,reject)=>runner.withSuccessHandler(value=>resolve(value as T)).withFailureHandler(reject).rpc(actions[url.pathname],payload))
+  }
   const response = await fetch(path, init)
   if (!response.ok) throw new Error(String(response.status))
   return response.json()
@@ -107,6 +119,8 @@ function Dashboard({session}:{session:Session}) {
     setStart(date.toISOString().slice(0,10));setEnd(session.range.end)
   }
   const data=view.data
+  const headline=section==='home' ? data?.metrics.filter(m=>['processed','transfers','contracts','paid'].includes(m.key)) ?? [] : []
+  const remaining=section==='home' ? data?.metrics.filter(m=>!headline.includes(m)) ?? [] : data?.metrics ?? []
   return <div className="shell">
     <aside><div className="brand"><span>Н</span><div>НССД<small>Аналитика колл-центра</small></div></div>
       <nav aria-label="Разделы">{sections.filter(([id])=>id!=='finance'||session.role!=='viewer').map(([id,label])=><a key={id} href={'#'+id} aria-current={id===section?'page':undefined}>{label}</a>)}</nav>
@@ -114,7 +128,7 @@ function Dashboard({session}:{session:Session}) {
     <main>
       <header className="top"><div><div className="eyebrow">Управленческая аналитика</div><h1>{sections.find(([id])=>id===section)?.[1]}</h1></div>
       <div className="top-actions"><button onClick={()=>setDark(!dark)}>{dark?'Светлая тема':'Тёмная тема'}</button><button onClick={refresh} disabled={refreshing}>{refreshing?'Обновление…':'Обновить данные'}</button>
-      <form action="/auth/logout" method="post"><input name="csrf" type="hidden" value={session.csrf}/><button>Выйти</button></form></div></header>
+      {!runner&&<form action="/auth/logout" method="post"><input name="csrf" type="hidden" value={session.csrf}/><button>Выйти</button></form>}</div></header>
       <div className="panel filters">
         <div className="presets">{[[1,'Последний день'],[7,'7 дней'],[0,'Месяц']].map(([days,label])=><button key={days} onClick={()=>preset(Number(days))}>{label}</button>)}</div>
         <label>С даты<input type="date" value={start} onChange={e=>setStart(e.target.value)}/></label>
@@ -132,10 +146,16 @@ function Dashboard({session}:{session:Session}) {
       {data&&<>
         <p className={data.stale?'notice':'muted'}>{data.stale?'Данные могут быть устаревшими. ':''}Синхронизация: {new Date(data.syncedAt).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'})} МСК</p>
         {data.coverage.map(x=><p className="notice" key={x}>{x}</p>)}
-        {!!data.metrics.length&&<div className="metrics">{data.metrics.map(m=><article className="panel kpi" key={m.key}><h2>{m.label}</h2><strong><Value value={m.value} unit={m.unit}/></strong>
+        {!!headline.length&&<div className="metrics headline">{headline.map(m=><article className="panel kpi" key={m.key}>
+          <h2>{m.label}</h2><strong><Value value={m.value}/></strong>
+          {m.plan!=null&&m.plan>0&&m.value!=null&&<><progress max={m.plan} value={Math.min(m.plan,m.value)} aria-label="Выполнение плана"/><small className={m.value>=m.plan?'good':'below'}>{fmt.format(m.value/m.plan*100)}% плана · {fmt.format(m.plan)}</small></>}
+          {m.delta!=null&&<small>К предыдущему периоду {m.delta>0?'+':''}{fmt.format(m.delta)}</small>}
+        </article>)}</div>}
+        {!!data.daily.length&&<section className="panel"><h2>Динамика по дням</h2><Chart daily={data.daily} dark={dark}/></section>}
+        {!!remaining.length&&<div className="metrics">{remaining.map(m=><article className="panel kpi" key={m.key}><h2>{m.label}</h2><strong><Value value={m.value} unit={m.unit}/></strong>
           {m.plan!=null&&<small>План {fmt.format(m.plan)}{m.plan>0&&m.value!==null?' · '+fmt.format(m.value/m.plan*100)+'%':''}</small>}
           {m.delta!=null&&<small>К предыдущему: {m.delta>0?'+':''}{fmt.format(m.delta)}{m.unit==='%'?' п. п.':''}</small>}</article>)}</div>}
-        {!!data.daily.length&&<section className="panel"><h2>Динамика по дням</h2><Chart daily={data.daily} dark={dark}/></section>}
+
         {!!data.signals.length&&<section className="panel"><h2>Что требует внимания</h2><ul className="signals">{data.signals.map(s=><li key={s.message}><a href={s.link}>{s.message}</a></li>)}</ul></section>}
         {data.tables.map(t=><Grid key={t.title} table={t}/>)}
       </>}
@@ -145,7 +165,7 @@ function Dashboard({session}:{session:Session}) {
 function App() {
   const session=useQuery({queryKey:['session'],queryFn:()=>api<Session>('/api/session'),refetchInterval:60_000})
   if(session.isPending) return <main className="login"><section className="panel" role="status">Проверка доступа…</section></main>
-  if(session.isError) return <main className="login"><section className="panel"><div className="eyebrow">НССД</div><h1>Аналитика колл-центра</h1><p>Войдите через допущенную корпоративную учётную запись.</p><a className="primary" href="/auth/login">Войти через Google</a></section></main>
+  if(session.isError) return <main className="login"><section className="panel"><div className="eyebrow">НССД</div><h1>Аналитика колл-центра</h1><p>{runner?"Проверьте настройки источников и попробуйте ещё раз.":"Войдите через допущенную корпоративную учётную запись."}</p>{runner?<><p role="alert">{session.error.message}</p><button onClick={()=>session.refetch()}>Повторить</button></>:<a className="primary" href="/auth/login">Войти через Google</a>}</section></main>
   return <Dashboard session={session.data}/>
 }
 createRoot(document.getElementById('root')!).render(<QueryClientProvider client={client}><App/></QueryClientProvider>)

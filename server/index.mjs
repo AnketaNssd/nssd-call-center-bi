@@ -1,3 +1,4 @@
+import { sourceSpec as contracts } from './sources.mjs'
 import express from 'express'
 import { GoogleAuth, OAuth2Client } from 'google-auth-library'
 import { randomBytes } from 'node:crypto'
@@ -66,13 +67,7 @@ app.post('/auth/logout',authorized,csrf,(req,res)=>{
 })
 app.use('/api',authorized)
 
-const regions=['МСК','СПБ','Самара','Краснодар','Казань','Нижний Новгород','Владивосток','Новосибирск','Иркутск']
-const sourceSpec={
-  main:{id:process.env.NSSD_SHEET_MAIN,ranges:["'Операционные_данные'!A5:K320","'Передачи_Менеджерам'!A5:N3000","'Договоры_Ноябрь'!A5:E200","'Брак_и_отказ_КЦ'!A4:E330","'Отказы_менеджеров'!A4:G1600"],caps:[316,2996,196,327,1597]},
-  calendar:{id:process.env.NSSD_SHEET_CALENDAR,ranges:["'Ссылки на лиды'!A2:G1673",...regions.map(x=>"'"+x+"'!A1:AF40")],caps:[1672]},
-  payroll:{id:process.env.NSSD_SHEET_PAYROLL,ranges:["'Расчет ЗП КЦ'!A5:N100"],caps:[96]},
-  roster:{id:process.env.NSSD_SHEET_ROSTER,ranges:["'График КЦ Ноябрь'!A4:AH100"],caps:[97]},
-}
+const sourceSpec=Object.fromEntries(Object.entries(contracts).map(([key,spec])=>[key,{...spec,id:process.env[spec.property]}]))
 const google=new GoogleAuth({scopes:['https://www.googleapis.com/auth/spreadsheets.readonly']})
 let data=null
 let syncedAt=null
@@ -158,3 +153,4 @@ app.use('/api',(_req,res)=>res.sendStatus(404))
 app.use(express.static(resolve('dist')))
 app.use((_error,_req,res,_next)=>res.sendStatus(500))
 app.listen(Number(process.env.PORT??8080),process.env.HOST??'127.0.0.1',()=>console.log('NSSD BI listening'))
+
