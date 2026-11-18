@@ -1,0 +1,10 @@
+{
+  "name": "nssd-call-center-bi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {"dev": "vite", "build": "tsc --noEmit && vite build", "start": "node server/index.mjs", "test": "node --test server/*.test.mjs"},
+  "dependencies": {"@tanstack/react-query":"^5", "echarts":"^6","express":"^5","google-auth-library":"^10","react":"^19","react-dom":"^19"},
+  "devDependencies": {"@types/react":"^19","@types/react-dom":"^19","typescript":"^5","vite":"^7"}
+}
